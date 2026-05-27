@@ -234,7 +234,11 @@ class UstaRegistrationProvider {
   /// Called from UstaListingPage on first open so the marketplace shows
   /// approved ustalar from the database. Safe to call repeatedly — only
   /// new ids are appended; existing rows are refreshed.
-  static Future<void> fetchAllFromCloud() async {
+  ///
+  /// Pass [force]=true from manual refresh handlers to bypass the
+  /// [hasFetched] guard (used by the admin web's "Yangilash" button).
+  static Future<void> fetchAllFromCloud({bool force = false}) async {
+    if (_hasFetched && !force) return;
     try {
       final rows = await Supabase.instance.client
           .from('usta_registrations')

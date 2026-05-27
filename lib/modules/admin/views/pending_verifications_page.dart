@@ -45,13 +45,34 @@ class _PendingVerificationsPageState extends State<PendingVerificationsPage> {
   }
 
   /// First-open hook: pulls every `usta_registrations` row from Supabase
-  /// so the admin queue reflects what's actually in the cloud.
+  /// so the admin queue reflects what's actually in the cloud. The cache
+  /// guard is intentionally ignored on every mount — see [_refresh] for
+  /// the cache-aware variant.
   Future<void> _bootstrap() async {
-    if (UstaRegistrationProvider.hasFetched) return;
     setState(() => _loading = true);
-    await UstaRegistrationProvider.fetchAllFromCloud();
+    await UstaRegistrationProvider.fetchAllFromCloud(force: true);
     if (!mounted) return;
     setState(() => _loading = false);
+  }
+
+  /// Manual refresh — pulls fresh data unconditionally and shows a quick
+  /// toast so the admin knows the call hit the network. Wired to the
+  /// refresh icon in the embedded toolbar.
+  Future<void> _refresh() async {
+    setState(() => _loading = true);
+    final before = UstaRegistrationProvider.allRegistrations().length;
+    await UstaRegistrationProvider.fetchAllFromCloud(force: true);
+    if (!mounted) return;
+    final after = UstaRegistrationProvider.allRegistrations().length;
+    setState(() => _loading = false);
+    final delta = after - before;
+    _toast(
+      title: 'Yangilandi',
+      body: delta > 0
+          ? '$delta yangi ariza qo\'shildi (jami: $after)'
+          : 'Jami $after ariza',
+      bg: const Color(0xFF1976D2),
+    );
   }
 
   // ── Actions ──────────────────────────────────────────────────────────
@@ -256,6 +277,8 @@ class _PendingVerificationsPageState extends State<PendingVerificationsPage> {
           searchValue: _search,
           onSearch: (v) => setState(() => _search = v),
           totalCount: list.length,
+          onRefresh: _refresh,
+          isRefreshing: _loading,
         ),
         Expanded(
           child: LayoutBuilder(builder: (context, c) {
@@ -601,6 +624,8 @@ class _EmbeddedToolbar extends StatelessWidget {
   final String searchValue;
   final ValueChanged<String> onSearch;
   final int totalCount;
+  final Future<void> Function() onRefresh;
+  final bool isRefreshing;
 
   const _EmbeddedToolbar({
     required this.current,
@@ -608,6 +633,8 @@ class _EmbeddedToolbar extends StatelessWidget {
     required this.searchValue,
     required this.onSearch,
     required this.totalCount,
+    required this.onRefresh,
+    required this.isRefreshing,
   });
 
   @override
@@ -652,6 +679,41 @@ class _EmbeddedToolbar extends StatelessWidget {
               fontSize: 11,
               fontWeight: FontWeight.w700,
               color: Color(0xFF475569),
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Material(
+          color: const Color(0xFF1976D2),
+          borderRadius: BorderRadius.circular(8),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(8),
+            onTap: isRefreshing ? null : onRefresh,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 12, vertical: 8),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                isRefreshing
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor: AlwaysStoppedAnimation(Colors.white),
+                        ),
+                      )
+                    : const Icon(Icons.refresh_rounded,
+                        size: 14, color: Colors.white),
+                const SizedBox(width: 6),
+                const Text(
+                  'Yangilash',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ]),
             ),
           ),
         ),

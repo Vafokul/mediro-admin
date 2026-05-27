@@ -175,6 +175,11 @@ class _AdminPanelPageState extends State<AdminPanelPage> {
   Widget _desktopContent() {
     // IndexedStack keeps each section alive so switching tabs preserves
     // scroll position and any open dialogs — a desktop-grade UX win.
+    // Each child carries a ValueKey tied to _selectedSection so that a
+    // future code path can force a remount if needed. The pages
+    // themselves now fetch fresh Supabase data on every mount via
+    // fetchAllFromCloud(force: true), so simply scrolling to a section
+    // is enough to get the latest queue.
     return IndexedStack(
       index: _selectedSection,
       children: const [
