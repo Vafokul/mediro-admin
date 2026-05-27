@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:get/get.dart';
 
@@ -11,9 +12,23 @@ import 'telemetry_page.dart';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  ADMIN PANEL — owner-only dashboard.
-//  NEVER mounted into the BottomNavigationBar. Reachable only via:
-//    Profile → long-press app version badge → passcode → AdminLoginPage.
-//  Decoupled from cart / checkout / marketplace — pure read of admin module.
+//
+//  Web-first dashboard for managing Mediro Usta-Market. Three responsive
+//  breakpoints:
+//
+//    ≥ 1280 px → DESKTOP layout: persistent left sidebar (Verifications /
+//                Complaints / Telemetry), header bar with search-shortcuts
+//                hint and admin email, single content surface on the right.
+//                Keyboard shortcuts: Alt+1, Alt+2, Alt+3 switch sections.
+//
+//    ≥ 1100 px → TABLET layout: two-column overview (Verifications +
+//                Complaints side by side) with a tile row underneath.
+//
+//    <  1100 px → MOBILE layout: stacked tile list (the original phone UI).
+//
+//  Sidebar nav is decoupled from Navigator — the embedded pages render
+//  inside the right pane via an IndexedStack so admins stay in the same
+//  shell while switching sections (no back button needed).
 // ═══════════════════════════════════════════════════════════════════════════════
 
 class AdminPanelPage extends StatefulWidget {
@@ -24,8 +39,32 @@ class AdminPanelPage extends StatefulWidget {
 }
 
 class _AdminPanelPageState extends State<AdminPanelPage> {
-  // Defensive: re-check on build in case status changes while the page is up.
+  /// 0 = Verifications, 1 = Complaints, 2 = Telemetry. Persisted in-memory
+  /// only — survives navigation inside the panel, resets on full reload.
+  int _selectedSection = 0;
+
+  /// FocusNode that owns keyboard shortcuts (Alt+1/2/3). Attached at the
+  /// scaffold root so the shortcuts fire regardless of which inner widget
+  /// has focus.
+  final FocusNode _shortcutFocus = FocusNode();
+
   void _refresh() => setState(() {});
+
+  @override
+  void initState() {
+    super.initState();
+    // Grab keyboard focus once first frame ships so Alt+N shortcuts work
+    // without the user having to click into the panel first.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _shortcutFocus.requestFocus();
+    });
+  }
+
+  @override
+  void dispose() {
+    _shortcutFocus.dispose();
+    super.dispose();
+  }
 
   Future<void> _signOut() async {
     await AdminSessionController.ensure().signOut();
@@ -33,12 +72,15 @@ class _AdminPanelPageState extends State<AdminPanelPage> {
     if (Navigator.of(context).canPop()) {
       Navigator.of(context).pop();
     } else {
-      // Web deep-link entry: replace with the login screen so the user
-      // doesn't land on an empty stack.
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(builder: (_) => const AdminLoginPage()),
       );
     }
+  }
+
+  void _selectSection(int idx) {
+    if (_selectedSection == idx) return;
+    setState(() => _selectedSection = idx);
   }
 
   @override
@@ -47,15 +89,249 @@ class _AdminPanelPageState extends State<AdminPanelPage> {
     final openComplaints = ComplaintProvider.openCount();
     final adminEmail = AdminSessionController.ensure().adminEmail.value;
 
-    return Scaffold(
-      backgroundColor: const Color(0xFFF7F8FA),
-      appBar: AppBar(
+    return Focus(
+      focusNode: _shortcutFocus,
+      autofocus: true,
+      onKeyEvent: _handleShortcut,
+      child: Scaffold(
+        backgroundColor: const Color(0xFFF7F8FA),
+        body: LayoutBuilder(builder: (context, c) {
+          if (c.maxWidth >= 1280) {
+            return _buildDesktopShell(
+                pending, openComplaints, adminEmail);
+          }
+          if (c.maxWidth >= 1100) {
+            return _buildTabletShell(
+                pending, openComplaints, adminEmail);
+          }
+          return _buildMobileShell(pending, openComplaints, adminEmail);
+        }),
+      ),
+    );
+  }
+
+  /// Alt+1/2/3 — switch sections in the desktop sidebar.
+  KeyEventResult _handleShortcut(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    if (!HardwareKeyboard.instance.isAltPressed) return KeyEventResult.ignored;
+    if (event.logicalKey == LogicalKeyboardKey.digit1) {
+      _selectSection(0);
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.digit2) {
+      _selectSection(1);
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.digit3) {
+      _selectSection(2);
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  // ───────────────────────────────────────────────────────────────────────────
+  //  DESKTOP SHELL (≥1280 px) — sidebar + content pane.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  Widget _buildDesktopShell(
+      int pending, int openComplaints, String adminEmail) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _DesktopSidebar(
+          selectedIndex: _selectedSection,
+          pendingBadge: pending,
+          complaintsBadge: openComplaints,
+          adminEmail: adminEmail,
+          onSelect: _selectSection,
+          onSignOut: _signOut,
+        ),
+        Expanded(
+          child: Column(
+            children: [
+              _DesktopTopBar(
+                section: _selectedSection,
+                pending: pending,
+                complaints: openComplaints,
+                adminEmail: adminEmail,
+              ),
+              Expanded(
+                child: Container(
+                  color: const Color(0xFFF7F8FA),
+                  padding: const EdgeInsets.fromLTRB(28, 20, 28, 20),
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 1600),
+                    child: _desktopContent(),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _desktopContent() {
+    // IndexedStack keeps each section alive so switching tabs preserves
+    // scroll position and any open dialogs — a desktop-grade UX win.
+    return IndexedStack(
+      index: _selectedSection,
+      children: const [
+        PendingVerificationsPage(embedded: true),
+        ComplaintsPage(embedded: true),
+        TelemetryPage(embedded: true),
+      ],
+    );
+  }
+
+  // ───────────────────────────────────────────────────────────────────────────
+  //  TABLET SHELL (≥1100 px) — original 2-column overview.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  Widget _buildTabletShell(
+      int pending, int openComplaints, String adminEmail) {
+    return Column(
+      children: [
+        _classicAppBar(adminEmail),
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(28, 24, 28, 24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (adminEmail.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 16),
+                    child: Text(
+                      'Welcome back, $adminEmail',
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
+                        color: Color(0xFF1F2937),
+                      ),
+                    ),
+                  ),
+                _SummaryRow(pending: pending, complaints: openComplaints),
+                const SizedBox(height: 18),
+                Expanded(
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: _DesktopColumn(
+                          title: 'admin_tile_verif_sub'.tr,
+                          color: const Color(0xFF1976D2),
+                          badge: pending,
+                          child: const PendingVerificationsPage(
+                              embedded: true),
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: _DesktopColumn(
+                          title: 'admin_tile_complaints_sub'.tr,
+                          color: const Color(0xFFD32F2F),
+                          badge: openComplaints,
+                          child: const ComplaintsPage(embedded: true),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 14),
+                _rbacFooter(),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ───────────────────────────────────────────────────────────────────────────
+  //  MOBILE SHELL (<1100 px) — original stacked tile list.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  Widget _buildMobileShell(
+      int pending, int openComplaints, String adminEmail) {
+    return Column(
+      children: [
+        _classicAppBar(adminEmail),
+        Expanded(
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 720),
+              child: ListView(
+                padding: EdgeInsets.fromLTRB(14.w, 14.h, 14.w, 24.h),
+                children: [
+                  _SummaryRow(pending: pending, complaints: openComplaints),
+                  SizedBox(height: 14.h),
+                  _AdminTile(
+                    icon: Icons.verified_user_rounded,
+                    color: const Color(0xFF1976D2),
+                    title: 'admin_tile_verif_title'.tr,
+                    subtitle: 'admin_tile_verif_sub'.tr,
+                    badge: pending > 0 ? '$pending' : null,
+                    onTap: () async {
+                      await Navigator.of(context).push(MaterialPageRoute(
+                          builder: (_) =>
+                              const PendingVerificationsPage()));
+                      _refresh();
+                    },
+                  ),
+                  SizedBox(height: 10.h),
+                  _AdminTile(
+                    icon: Icons.report_gmailerrorred_rounded,
+                    color: const Color(0xFFD32F2F),
+                    title: 'admin_tile_complaints_title'.tr,
+                    subtitle: 'admin_tile_complaints_sub'.tr,
+                    badge: openComplaints > 0 ? '$openComplaints' : null,
+                    onTap: () async {
+                      await Navigator.of(context).push(MaterialPageRoute(
+                          builder: (_) => const ComplaintsPage()));
+                      _refresh();
+                    },
+                  ),
+                  SizedBox(height: 10.h),
+                  _AdminTile(
+                    icon: Icons.insights_rounded,
+                    color: const Color(0xFF6D28D9),
+                    title: 'admin_tile_telemetry_title'.tr,
+                    subtitle: 'admin_tile_telemetry_sub'.tr,
+                    badge: 'BETA',
+                    onTap: () async {
+                      await Navigator.of(context).push(MaterialPageRoute(
+                          builder: (_) => const TelemetryPage()));
+                      _refresh();
+                    },
+                  ),
+                  SizedBox(height: 18.h),
+                  _rbacFooter(),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ───────────────────────────────────────────────────────────────────────────
+  //  Shared chrome bits.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  PreferredSizeWidget _classicAppBar(String adminEmail) {
+    return PreferredSize(
+      preferredSize: const Size.fromHeight(56),
+      child: AppBar(
         backgroundColor: const Color(0xFF0F172A),
         foregroundColor: Colors.white,
         elevation: 0,
         leading: Navigator.of(context).canPop()
             ? IconButton(
-                icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 18),
+                icon:
+                    const Icon(Icons.arrow_back_ios_new_rounded, size: 18),
                 onPressed: () => Navigator.of(context).pop(),
               )
             : null,
@@ -94,123 +370,6 @@ class _AdminPanelPageState extends State<AdminPanelPage> {
           ),
         ],
       ),
-      body: LayoutBuilder(builder: (context, c) {
-        // Responsive: ≥1100 px gets two columns (verifications + complaints
-        // side by side); ≥700 px gets a centered max-width column so a
-        // desktop browser doesn't stretch the form full-width; below that
-        // is the mobile single-column layout.
-        if (c.maxWidth >= 1100) {
-          return _buildDesktopWide(pending, openComplaints);
-        }
-        return Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 720),
-            child: _buildSingleColumn(pending, openComplaints),
-          ),
-        );
-      }),
-    );
-  }
-
-  Widget _buildSingleColumn(int pending, int openComplaints) {
-    return ListView(
-      padding: EdgeInsets.fromLTRB(14.w, 14.h, 14.w, 24.h),
-      children: [
-        _SummaryRow(pending: pending, complaints: openComplaints),
-        SizedBox(height: 14.h),
-        _AdminTile(
-          icon: Icons.verified_user_rounded,
-          color: const Color(0xFF1976D2),
-          title: 'admin_tile_verif_title'.tr,
-          subtitle: 'admin_tile_verif_sub'.tr,
-          badge: pending > 0 ? '$pending' : null,
-          onTap: () async {
-            await Navigator.of(context).push(MaterialPageRoute(
-                builder: (_) => const PendingVerificationsPage()));
-            _refresh();
-          },
-        ),
-        SizedBox(height: 10.h),
-        _AdminTile(
-          icon: Icons.report_gmailerrorred_rounded,
-          color: const Color(0xFFD32F2F),
-          title: 'admin_tile_complaints_title'.tr,
-          subtitle: 'admin_tile_complaints_sub'.tr,
-          badge: openComplaints > 0 ? '$openComplaints' : null,
-          onTap: () async {
-            await Navigator.of(context).push(MaterialPageRoute(
-                builder: (_) => const ComplaintsPage()));
-            _refresh();
-          },
-        ),
-        SizedBox(height: 10.h),
-        _AdminTile(
-          icon: Icons.insights_rounded,
-          color: const Color(0xFF6D28D9),
-          title: 'admin_tile_telemetry_title'.tr,
-          subtitle: 'admin_tile_telemetry_sub'.tr,
-          badge: 'BETA',
-          onTap: () async {
-            await Navigator.of(context).push(MaterialPageRoute(
-                builder: (_) => const TelemetryPage()));
-            _refresh();
-          },
-        ),
-        SizedBox(height: 18.h),
-        _rbacFooter(),
-      ],
-    );
-  }
-
-  Widget _buildDesktopWide(int pending, int openComplaints) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(28, 24, 28, 24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Get.find<AdminSessionController>().adminEmail.value.isEmpty
-              ? const SizedBox.shrink()
-              : Padding(
-                  padding: const EdgeInsets.only(bottom: 16),
-                  child: Text(
-                    'Welcome back, ${Get.find<AdminSessionController>().adminEmail.value}',
-                    style: const TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w800,
-                      color: Color(0xFF1F2937),
-                    ),
-                  ),
-                ),
-          _SummaryRow(pending: pending, complaints: openComplaints),
-          const SizedBox(height: 18),
-          Expanded(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: _DesktopColumn(
-                    title: 'admin_tile_verif_sub'.tr,
-                    color: const Color(0xFF1976D2),
-                    badge: pending,
-                    child: const PendingVerificationsPage(embedded: true),
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: _DesktopColumn(
-                    title: 'admin_tile_complaints_sub'.tr,
-                    color: const Color(0xFFD32F2F),
-                    badge: openComplaints,
-                    child: const ComplaintsPage(embedded: true),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 14),
-          _rbacFooter(),
-        ],
-      ),
     );
   }
 
@@ -241,13 +400,395 @@ class _AdminPanelPageState extends State<AdminPanelPage> {
       ]),
     );
   }
-
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Desktop column wrapper — light header + scrollable child. Used on ≥1100px
-//  screens to show Verifications + Complaints side-by-side without leaving
-//  the panel.
+//  DESKTOP SIDEBAR (≥1280 px) — persistent nav rail with brand, sections,
+//  admin identity, and sign-out. Fixed 240 px wide so the content pane has
+//  predictable space.
+// ─────────────────────────────────────────────────────────────────────────────
+class _DesktopSidebar extends StatelessWidget {
+  final int selectedIndex;
+  final int pendingBadge;
+  final int complaintsBadge;
+  final String adminEmail;
+  final ValueChanged<int> onSelect;
+  final VoidCallback onSignOut;
+
+  const _DesktopSidebar({
+    required this.selectedIndex,
+    required this.pendingBadge,
+    required this.complaintsBadge,
+    required this.adminEmail,
+    required this.onSelect,
+    required this.onSignOut,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 240,
+      decoration: const BoxDecoration(
+        color: Color(0xFF0F172A),
+        boxShadow: [
+          BoxShadow(
+            color: Color(0x22000000),
+            blurRadius: 12,
+            offset: Offset(2, 0),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Brand row
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 22, 20, 18),
+            child: Row(children: [
+              Icon(Icons.admin_panel_settings_rounded,
+                  size: 22, color: Colors.amber.shade300),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text(
+                  'Mediro Admin',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.2,
+                  ),
+                ),
+              ),
+            ]),
+          ),
+          const Divider(height: 1, color: Color(0x22FFFFFF)),
+          const SizedBox(height: 10),
+          _SidebarItem(
+            icon: Icons.verified_user_rounded,
+            label: 'admin_tile_verif_title'.tr,
+            shortcut: 'Alt+1',
+            badge: pendingBadge > 0 ? '$pendingBadge' : null,
+            badgeColor: const Color(0xFF1976D2),
+            selected: selectedIndex == 0,
+            onTap: () => onSelect(0),
+          ),
+          _SidebarItem(
+            icon: Icons.report_gmailerrorred_rounded,
+            label: 'admin_tile_complaints_title'.tr,
+            shortcut: 'Alt+2',
+            badge: complaintsBadge > 0 ? '$complaintsBadge' : null,
+            badgeColor: const Color(0xFFD32F2F),
+            selected: selectedIndex == 1,
+            onTap: () => onSelect(1),
+          ),
+          _SidebarItem(
+            icon: Icons.insights_rounded,
+            label: 'admin_tile_telemetry_title'.tr,
+            shortcut: 'Alt+3',
+            badge: 'BETA',
+            badgeColor: const Color(0xFF6D28D9),
+            selected: selectedIndex == 2,
+            onTap: () => onSelect(2),
+          ),
+          const Spacer(),
+          if (adminEmail.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 6),
+              child: Row(children: [
+                CircleAvatar(
+                  radius: 13,
+                  backgroundColor: Colors.amber.shade300,
+                  child: Text(
+                    adminEmail.isNotEmpty
+                        ? adminEmail[0].toUpperCase()
+                        : '?',
+                    style: const TextStyle(
+                      color: Color(0xFF0F172A),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    adminEmail,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white70,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ]),
+            ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 6, 12, 14),
+            child: Material(
+              color: const Color(0x22FFFFFF),
+              borderRadius: BorderRadius.circular(8),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(8),
+                onTap: onSignOut,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 12, vertical: 10),
+                  child: Row(children: [
+                    const Icon(Icons.logout_rounded,
+                        size: 16, color: Colors.white),
+                    const SizedBox(width: 10),
+                    Text(
+                      'admin_sign_out_tooltip'.tr,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ]),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SidebarItem extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String shortcut;
+  final String? badge;
+  final Color badgeColor;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _SidebarItem({
+    required this.icon,
+    required this.label,
+    required this.shortcut,
+    required this.badge,
+    required this.badgeColor,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+      child: Material(
+        color: selected
+            ? const Color(0x33FFFFFF)
+            : Colors.transparent,
+        borderRadius: BorderRadius.circular(8),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+                horizontal: 12, vertical: 10),
+            child: Row(children: [
+              Icon(icon,
+                  size: 18,
+                  color: selected
+                      ? Colors.amber.shade300
+                      : Colors.white70),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    color:
+                        selected ? Colors.white : Colors.white.withOpacity(0.85),
+                    fontSize: 13,
+                    fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+                  ),
+                ),
+              ),
+              if (badge != null)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 7, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: badgeColor,
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(
+                    badge!,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                )
+              else
+                Text(
+                  shortcut,
+                  style: const TextStyle(
+                    color: Colors.white38,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  DESKTOP TOP BAR — title of the active section + KPI summary row + small
+//  shortcuts hint. Surfaces on the right pane only.
+// ─────────────────────────────────────────────────────────────────────────────
+class _DesktopTopBar extends StatelessWidget {
+  final int section;
+  final int pending;
+  final int complaints;
+  final String adminEmail;
+
+  const _DesktopTopBar({
+    required this.section,
+    required this.pending,
+    required this.complaints,
+    required this.adminEmail,
+  });
+
+  String get _title {
+    switch (section) {
+      case 1:
+        return 'admin_tile_complaints_title'.tr;
+      case 2:
+        return 'admin_tile_telemetry_title'.tr;
+      case 0:
+      default:
+        return 'admin_tile_verif_title'.tr;
+    }
+  }
+
+  String get _subtitle {
+    switch (section) {
+      case 1:
+        return 'admin_tile_complaints_sub'.tr;
+      case 2:
+        return 'admin_tile_telemetry_sub'.tr;
+      case 0:
+      default:
+        return 'admin_tile_verif_sub'.tr;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(28, 18, 28, 18),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(
+          bottom: BorderSide(color: Color(0x14000000)),
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _title,
+                  style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
+                    color: Color(0xFF1F2937),
+                    letterSpacing: -0.3,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  _subtitle,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.grey.shade600,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          _KpiPill(
+            label: 'admin_stat_pending'.tr,
+            value: '$pending',
+            color: const Color(0xFF1976D2),
+            icon: Icons.hourglass_top_rounded,
+          ),
+          const SizedBox(width: 10),
+          _KpiPill(
+            label: 'admin_stat_complaints'.tr,
+            value: '$complaints',
+            color: const Color(0xFFD32F2F),
+            icon: Icons.warning_amber_rounded,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _KpiPill extends StatelessWidget {
+  final String label;
+  final String value;
+  final Color color;
+  final IconData icon;
+  const _KpiPill({
+    required this.label,
+    required this.value,
+    required this.color,
+    required this.icon,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withOpacity(0.20)),
+      ),
+      child: Row(children: [
+        Icon(icon, size: 16, color: color),
+        const SizedBox(width: 8),
+        Text(
+          value,
+          style: TextStyle(
+            color: color,
+            fontSize: 14,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        const SizedBox(width: 6),
+        Text(
+          label,
+          style: TextStyle(
+            color: Colors.grey.shade700,
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ]),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Tablet 2-column wrapper (kept for the 1100–1280 px range).
 // ─────────────────────────────────────────────────────────────────────────────
 class _DesktopColumn extends StatelessWidget {
   final String title;
