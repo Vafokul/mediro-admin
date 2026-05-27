@@ -1,0 +1,9 @@
+{
+  "version": 2,
+  "buildCommand": "if cd /opt/flutter 2>/dev/null && git pull origin stable; then echo flutter already cloned; else git clone https://github.com/flutter/flutter.git -b stable --depth 1 /opt/flutter; fi && export PATH=\"/opt/flutter/bin:$PATH\" && flutter doctor && flutter pub get && flutter build web --release",
+  "outputDirectory": "build/web",
+  "framework": null,
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
+}
