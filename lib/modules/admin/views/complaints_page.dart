@@ -16,6 +16,11 @@ class ComplaintsPage extends StatefulWidget {
 }
 
 class _ComplaintsPageState extends State<ComplaintsPage> {
+  String _statusFilter = 'all'; // 'all'|'open'|'under_review'|'resolved'|'dismissed'
+  String _search = '';
+  int _sortColumnIndex = 4; // Created (newest first by default)
+  bool _sortAscending = false;
+
   void _resolve(Complaint c) {
     setState(() => ComplaintProvider.resolve(c.id));
     Get.snackbar(
@@ -44,9 +49,28 @@ class _ComplaintsPageState extends State<ComplaintsPage> {
     );
   }
 
+  List<Complaint> _filtered() {
+    var list = ComplaintProvider.all();
+    if (_statusFilter != 'all') {
+      list = list.where((c) => c.status == _statusFilter).toList();
+    }
+    if (_search.trim().isNotEmpty) {
+      final q = _search.trim().toLowerCase();
+      list = list
+          .where((c) =>
+              c.ustaName.toLowerCase().contains(q) ||
+              c.clientLabel.toLowerCase().contains(q) ||
+              c.orderId.toLowerCase().contains(q) ||
+              c.reason.toLowerCase().contains(q))
+          .toList();
+    }
+    return list;
+  }
+
   @override
   Widget build(BuildContext context) {
-    final list = ComplaintProvider.all();
+    final list = _filtered();
+    if (widget.embedded) return _buildEmbedded(list);
     final body = list.isEmpty
         ? Center(
             child: Padding(
@@ -66,7 +90,6 @@ class _ComplaintsPageState extends State<ComplaintsPage> {
               onDismiss: _dismiss,
             ),
           );
-    if (widget.embedded) return body;
     return Scaffold(
       backgroundColor: const Color(0xFFF7F8FA),
       appBar: AppBar(
@@ -89,6 +112,397 @@ class _ComplaintsPageState extends State<ComplaintsPage> {
         ),
       ),
       body: body,
+    );
+  }
+
+  // ── Embedded (desktop pane) ─────────────────────────────────────────
+
+  Widget _buildEmbedded(List<Complaint> list) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _ComplaintsToolbar(
+          current: _statusFilter,
+          onChanged: (s) => setState(() => _statusFilter = s),
+          searchValue: _search,
+          onSearch: (v) => setState(() => _search = v),
+          totalCount: list.length,
+        ),
+        Expanded(
+          child: LayoutBuilder(builder: (context, c) {
+            if (list.isEmpty) {
+              return Center(
+                child: Text('cmp_admin_empty'.tr,
+                    style: TextStyle(
+                        fontSize: 13, color: Colors.grey.shade600)),
+              );
+            }
+            if (c.maxWidth >= 900) return _complaintsTable(list);
+            return ListView.separated(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
+              itemCount: list.length,
+              separatorBuilder: (_, __) => const SizedBox(height: 10),
+              itemBuilder: (_, i) => _ComplaintCard(
+                complaint: list[i],
+                onResolve: _resolve,
+                onDismiss: _dismiss,
+              ),
+            );
+          }),
+        ),
+      ],
+    );
+  }
+
+  Widget _complaintsTable(List<Complaint> rows) {
+    rows.sort((a, b) {
+      int cmp;
+      switch (_sortColumnIndex) {
+        case 0:
+          cmp = a.ustaName.toLowerCase().compareTo(b.ustaName.toLowerCase());
+          break;
+        case 1:
+          cmp = a.clientLabel.compareTo(b.clientLabel);
+          break;
+        case 2:
+          cmp = a.reason.toLowerCase().compareTo(b.reason.toLowerCase());
+          break;
+        case 3:
+          cmp = a.status.compareTo(b.status);
+          break;
+        case 4:
+        default:
+          cmp = a.createdAt.compareTo(b.createdAt);
+      }
+      return _sortAscending ? cmp : -cmp;
+    });
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: const Color(0x14000000)),
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: DataTable(
+            sortColumnIndex: _sortColumnIndex,
+            sortAscending: _sortAscending,
+            headingRowColor:
+                WidgetStateProperty.all(const Color(0xFFF1F5F9)),
+            headingTextStyle: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+              color: Color(0xFF334155),
+              letterSpacing: 0.4,
+            ),
+            dataRowMinHeight: 56,
+            dataRowMaxHeight: 72,
+            columnSpacing: 18,
+            horizontalMargin: 16,
+            columns: [
+              _col('USTA', 0),
+              _col('CLIENT / ORDER', 1),
+              _col('REASON', 2),
+              _col('STATUS', 3),
+              _col('CREATED', 4),
+              const DataColumn(label: Text('ACTIONS')),
+            ],
+            rows: rows.map((c) {
+              final v = _statusVisualFor(c.status);
+              final actionable =
+                  c.status == 'under_review' || c.status == 'open';
+              return DataRow(cells: [
+                DataCell(Text(c.ustaName,
+                    style: const TextStyle(
+                        fontSize: 12.5, fontWeight: FontWeight.w700))),
+                DataCell(Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(c.clientLabel,
+                        style: const TextStyle(fontSize: 12)),
+                    Text(c.orderId,
+                        style: TextStyle(
+                            fontSize: 10.5,
+                            color: Colors.grey.shade600,
+                            fontWeight: FontWeight.w600)),
+                  ],
+                )),
+                DataCell(SizedBox(
+                  width: 220,
+                  child: Text(c.reason,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 12)),
+                )),
+                DataCell(Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: v.bg,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(v.label,
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                        color: v.fg,
+                        letterSpacing: 0.4,
+                      )),
+                )),
+                DataCell(Text(
+                  DateFormat('d MMM, HH:mm').format(c.createdAt),
+                  style: TextStyle(
+                      fontSize: 11.5, color: Colors.grey.shade600),
+                )),
+                DataCell(actionable
+                    ? Row(mainAxisSize: MainAxisSize.min, children: [
+                        SizedBox(
+                          height: 30,
+                          child: OutlinedButton.icon(
+                            onPressed: () => _dismiss(c),
+                            icon: const Icon(Icons.close_rounded, size: 12),
+                            label: Text('cmp_admin_btn_dismiss'.tr,
+                                style: const TextStyle(fontSize: 11)),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: const Color(0xFFB45309),
+                              side: const BorderSide(color: Color(0xFFB45309)),
+                              padding: const EdgeInsets.symmetric(horizontal: 10),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(7),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        SizedBox(
+                          height: 30,
+                          child: ElevatedButton.icon(
+                            onPressed: () => _resolve(c),
+                            icon: const Icon(
+                                Icons.check_circle_outline_rounded, size: 12),
+                            label: Text('cmp_admin_btn_resolve'.tr,
+                                style: const TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w800)),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF198754),
+                              foregroundColor: Colors.white,
+                              elevation: 0,
+                              padding: const EdgeInsets.symmetric(horizontal: 10),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(7),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ])
+                    : Text('—',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey.shade400,
+                        ))),
+              ]);
+            }).toList(),
+          ),
+        ),
+      ),
+    );
+  }
+
+  DataColumn _col(String label, int index) {
+    return DataColumn(
+      label: Text(label),
+      onSort: (i, asc) => setState(() {
+        _sortColumnIndex = i;
+        _sortAscending = asc;
+      }),
+    );
+  }
+
+  ({Color bg, Color fg, String label}) _statusVisualFor(String s) {
+    switch (s) {
+      case 'under_review':
+        return (
+          bg: const Color(0xFFFFEBEE),
+          fg: const Color(0xFFD32F2F),
+          label: 'cmp_admin_status_review'.tr,
+        );
+      case 'open':
+        return (
+          bg: const Color(0xFFFFF3E0),
+          fg: const Color(0xFFE65100),
+          label: 'cmp_admin_status_open'.tr,
+        );
+      case 'resolved':
+        return (
+          bg: const Color(0xFFE8F5E9),
+          fg: const Color(0xFF2E7D32),
+          label: 'cmp_admin_status_resolved'.tr,
+        );
+      case 'dismissed':
+        return (
+          bg: const Color(0xFFECEFF1),
+          fg: const Color(0xFF455A64),
+          label: 'cmp_admin_status_dismissed'.tr,
+        );
+      default:
+        return (
+          bg: const Color(0xFFECEFF1),
+          fg: const Color(0xFF455A64),
+          label: s,
+        );
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Complaints toolbar — light-themed filter chips + search field for the
+//  desktop embedded pane.
+// ─────────────────────────────────────────────────────────────────────────────
+class _ComplaintsToolbar extends StatelessWidget {
+  final String current;
+  final ValueChanged<String> onChanged;
+  final String searchValue;
+  final ValueChanged<String> onSearch;
+  final int totalCount;
+
+  const _ComplaintsToolbar({
+    required this.current,
+    required this.onChanged,
+    required this.searchValue,
+    required this.onSearch,
+    required this.totalCount,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final filters = [
+      ('all',          'Barchasi',     const Color(0xFF64748B)),
+      ('open',         'Yangi',        const Color(0xFFE65100)),
+      ('under_review', "Ko'rilmoqda",  const Color(0xFFD32F2F)),
+      ('resolved',     'Hal qilindi',  const Color(0xFF2E7D32)),
+      ('dismissed',    'Bekor',        const Color(0xFF455A64)),
+    ];
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(
+          bottom: BorderSide(color: Color(0x14000000)),
+        ),
+      ),
+      child: Row(children: [
+        Expanded(
+          child: Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: filters.map((f) {
+              final active = current == f.$1;
+              return _ComplaintChip(
+                label: f.$2,
+                color: f.$3,
+                active: active,
+                onTap: () => onChanged(f.$1),
+              );
+            }).toList(),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF1F5F9),
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Text('$totalCount rows',
+              style: const TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFF475569),
+              )),
+        ),
+        const SizedBox(width: 12),
+        SizedBox(
+          width: 260,
+          height: 36,
+          child: TextField(
+            onChanged: onSearch,
+            decoration: InputDecoration(
+              hintText: 'Search usta / order / reason…',
+              hintStyle:
+                  TextStyle(fontSize: 12, color: Colors.grey.shade500),
+              prefixIcon: const Icon(Icons.search, size: 16),
+              prefixIconConstraints:
+                  const BoxConstraints(minWidth: 32, minHeight: 32),
+              isDense: true,
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+              filled: true,
+              fillColor: const Color(0xFFF8FAFC),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: const BorderSide(color: Color(0x14000000)),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: const BorderSide(color: Color(0x14000000)),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: const BorderSide(
+                    color: Color(0xFFD32F2F), width: 1.4),
+              ),
+            ),
+            style: const TextStyle(fontSize: 12),
+          ),
+        ),
+      ]),
+    );
+  }
+}
+
+class _ComplaintChip extends StatelessWidget {
+  final String label;
+  final Color color;
+  final bool active;
+  final VoidCallback onTap;
+  const _ComplaintChip({
+    required this.label,
+    required this.color,
+    required this.active,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: active ? color : Colors.transparent,
+      borderRadius: BorderRadius.circular(20),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: active ? color : color.withOpacity(0.30),
+            ),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 11.5,
+              fontWeight: FontWeight.w800,
+              color: active ? Colors.white : color,
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
