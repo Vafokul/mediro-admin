@@ -1,0 +1,532 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_screenutil/flutter_screenutil.dart';
+import 'package:get/get.dart';
+
+import '../../usta/data/usta_registration_provider.dart';
+import '../data/mock_admin_data.dart';
+import 'usta_detail_admin_view.dart';
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  ADMIN — ALL USTALAR PAGE (formerly "Pending Verifications")
+//
+//  Now shows ALL registrations (pending / approved / rejected) with a top
+//  status filter row. Each card's action buttons adapt to its status:
+//    pending  → [Reject] [Approve]
+//    approved → [Suspend] [Delete]
+//    rejected → [Re-approve] [Delete]
+//
+//  Cloud-backed: pulls fresh data from Supabase on first open via
+//  UstaRegistrationProvider.fetchAllFromCloud().
+// ═══════════════════════════════════════════════════════════════════════════════
+
+class PendingVerificationsPage extends StatefulWidget {
+  /// When true, the page is rendered inside the desktop wide layout's column
+  /// wrapper — no Scaffold/AppBar, just the body.
+  final bool embedded;
+  const PendingVerificationsPage({super.key, this.embedded = false});
+
+  @override
+  State<PendingVerificationsPage> createState() =>
+      _PendingVerificationsPageState();
+}
+
+class _PendingVerificationsPageState extends State<PendingVerificationsPage> {
+  bool _loading = false;
+  String _statusFilter = 'pending'; // 'all'|'pending'|'approved'|'rejected'
+
+  @override
+  void initState() {
+    super.initState();
+    _bootstrap();
+  }
+
+  /// First-open hook: pulls every `usta_registrations` row from Supabase
+  /// so the admin queue reflects what's actually in the cloud.
+  Future<void> _bootstrap() async {
+    if (UstaRegistrationProvider.hasFetched) return;
+    setState(() => _loading = true);
+    await UstaRegistrationProvider.fetchAllFromCloud();
+    if (!mounted) return;
+    setState(() => _loading = false);
+  }
+
+  // ── Actions ──────────────────────────────────────────────────────────
+
+  void _approve(PendingVerification pv) {
+    setState(() => PendingVerificationProvider.approveByUstaId(pv.ustaId));
+    _toast(
+      title: 'detail_snack_approved'.tr,
+      body: 'verif_snack_approved_body'.tr.replaceAll('{name}', pv.name),
+      bg: const Color(0xFF198754),
+    );
+  }
+
+  void _reject(PendingVerification pv) {
+    setState(() => PendingVerificationProvider.rejectByUstaId(pv.ustaId));
+    _toast(
+      title: 'detail_snack_rejected'.tr,
+      body: 'verif_snack_rejected_body'.tr.replaceAll('{name}', pv.name),
+      bg: const Color(0xFFB45309),
+    );
+  }
+
+  /// Admin: revoke approval — usta vanishes from the marketplace listing
+  /// but stays in the queue (status='rejected') for audit / re-approval.
+  void _suspend(PendingVerification pv) {
+    setState(() => PendingVerificationProvider.suspendByUstaId(pv.ustaId));
+    _toast(
+      title: "Faollik to'xtatildi",
+      body: '${pv.name} marketdan vaqtinchalik olib tashlandi.',
+      bg: const Color(0xFFB45309),
+    );
+  }
+
+  /// Soft-delete: status='deleted'. Vanishes from every admin tab + the
+  /// marketplace. Confirmation dialog first — destructive action.
+  Future<void> _confirmDelete(PendingVerification pv) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Row(children: [
+          Icon(Icons.delete_outline_rounded,
+              size: 22.sp, color: Colors.red.shade700),
+          SizedBox(width: 8.w),
+          const Text('Ustani o\'chirish'),
+        ]),
+        content: Text(
+          "${pv.name} arizasini o'chirmoqchimisiz? "
+          "Bu amal qaytarib bo'lmaydi va usta marketdan butunlay yo'qoladi.",
+          style: TextStyle(fontSize: 13.sp, height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Bekor'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red.shade700),
+            child: const Text("O'chirish"),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    setState(() => PendingVerificationProvider.softDeleteByUstaId(pv.ustaId));
+    _toast(
+      title: "O'chirildi",
+      body: "${pv.name} marketdan o'chirildi.",
+      bg: Colors.red.shade700,
+    );
+  }
+
+  void _toast({required String title, required String body, required Color bg}) {
+    Get.snackbar(
+      title,
+      body,
+      snackPosition: SnackPosition.TOP,
+      backgroundColor: bg,
+      colorText: Colors.white,
+      margin: EdgeInsets.all(12.w),
+      borderRadius: 10,
+      duration: const Duration(seconds: 2),
+    );
+  }
+
+  // ── Build ────────────────────────────────────────────────────────────
+
+  @override
+  Widget build(BuildContext context) {
+    // Pull rows filtered by the currently selected status tab.
+    final list = PendingVerificationProvider.byStatus(_statusFilter);
+    final body = _buildBody(list);
+    if (widget.embedded) return body;
+    return Scaffold(
+      backgroundColor: const Color(0xFFF7F8FA),
+      appBar: AppBar(
+        backgroundColor: const Color(0xFF0F172A),
+        foregroundColor: Colors.white,
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 18),
+          onPressed: () {
+            if (Navigator.of(context).canPop()) Navigator.of(context).pop();
+          },
+        ),
+        title: Text(
+          'verif_title'.tr,
+          style: TextStyle(
+            fontSize: 15.sp,
+            fontWeight: FontWeight.w800,
+            letterSpacing: -0.2,
+          ),
+        ),
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(44),
+          child: _FilterChipsRow(
+            current: _statusFilter,
+            onChanged: (s) => setState(() => _statusFilter = s),
+          ),
+        ),
+      ),
+      body: body,
+    );
+  }
+
+  Widget _buildBody(List<PendingVerification> list) {
+    if (_loading) {
+      return const Center(
+        child: CircularProgressIndicator(
+          color: Color(0xFF1976D2),
+          strokeWidth: 2,
+        ),
+      );
+    }
+    if (list.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: EdgeInsets.all(28.w),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.inbox_rounded,
+                  size: 42.sp, color: Colors.grey.shade400),
+              SizedBox(height: 12.h),
+              Text(
+                _emptyMessage(),
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 13.sp, color: Colors.grey.shade600),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    return ListView.separated(
+      padding: EdgeInsets.fromLTRB(14.w, 14.h, 14.w, 24.h),
+      itemCount: list.length,
+      separatorBuilder: (_, __) => SizedBox(height: 10.h),
+      itemBuilder: (context, i) => _UstaCard(
+        pv: list[i],
+        onTap: () => _openDetail(list[i]),
+        onApprove: () => _approve(list[i]),
+        onReject: () => _reject(list[i]),
+        onSuspend: () => _suspend(list[i]),
+        onDelete: () => _confirmDelete(list[i]),
+      ),
+    );
+  }
+
+  String _emptyMessage() {
+    switch (_statusFilter) {
+      case 'pending':  return 'verif_empty'.tr;
+      case 'approved': return "Tasdiqlangan ustalar yo'q";
+      case 'rejected': return "Rad etilgan arizalar yo'q";
+      default:         return "Hech qanday ariza yo'q";
+    }
+  }
+
+  Future<void> _openDetail(PendingVerification pv) async {
+    await Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => UstaDetailAdminView(pending: pv),
+    ));
+    if (mounted) setState(() {});
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  STATUS FILTER CHIPS ROW
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _FilterChipsRow extends StatelessWidget {
+  final String current;
+  final ValueChanged<String> onChanged;
+
+  const _FilterChipsRow({required this.current, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    final filters = [
+      ('all',      'Barchasi',     Colors.grey.shade300),
+      ('pending',  'Kutilmoqda',   Colors.orange.shade300),
+      ('approved', 'Tasdiqlangan', Colors.green.shade300),
+      ('rejected', 'Rad etilgan',  Colors.red.shade300),
+    ];
+    return Container(
+      color: const Color(0xFF0F172A),
+      padding: EdgeInsets.only(left: 12.w, right: 12.w, bottom: 10.h),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: filters.map((f) {
+            final active = current == f.$1;
+            return Padding(
+              padding: EdgeInsets.only(right: 8.w),
+              child: ChoiceChip(
+                label: Text(f.$2),
+                selected: active,
+                onSelected: (_) => onChanged(f.$1),
+                backgroundColor: Colors.white.withOpacity(0.08),
+                selectedColor: f.$3,
+                labelStyle: TextStyle(
+                  fontSize: 11.5.sp,
+                  fontWeight: FontWeight.w700,
+                  color: active ? Colors.black87 : Colors.white,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(20.r),
+                  side: BorderSide(
+                    color: active
+                        ? f.$3
+                        : Colors.white.withOpacity(0.15),
+                  ),
+                ),
+              ),
+            );
+          }).toList(),
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  USTA CARD — status-aware actions
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _UstaCard extends StatelessWidget {
+  final PendingVerification pv;
+  final VoidCallback onTap;
+  final VoidCallback onApprove;
+  final VoidCallback onReject;
+  final VoidCallback onSuspend;
+  final VoidCallback onDelete;
+
+  const _UstaCard({
+    required this.pv,
+    required this.onTap,
+    required this.onApprove,
+    required this.onReject,
+    required this.onSuspend,
+    required this.onDelete,
+  });
+
+  String _initials(String name) {
+    final parts = name.trim().split(RegExp(r'\s+'));
+    if (parts.length == 1) return parts.first.substring(0, 1).toUpperCase();
+    return (parts.first.substring(0, 1) + parts.last.substring(0, 1))
+        .toUpperCase();
+  }
+
+  /// Returns the current status by querying the registration provider.
+  /// (PendingVerification doesn't carry status — we derive it.)
+  String _currentStatus() {
+    final reg = UstaRegistrationProvider.allRegistrations()
+        .firstWhere((r) => r.id == pv.ustaId,
+            orElse: () => UstaRegistration(
+                  id: pv.ustaId,
+                  name: pv.name,
+                  phone: '',
+                  category: pv.specialty,
+                  provinceId: pv.provinceId ?? 0,
+                  experienceYears: pv.experienceYears,
+                  status: 'pending',
+                  submittedAt: pv.submittedAt,
+                ));
+    return reg.status;
+  }
+
+  ({Color bg, Color fg, String label}) _statusVisual(String s) {
+    switch (s) {
+      case 'pending':
+        return (bg: const Color(0xFFFFF3E0), fg: const Color(0xFFE65100), label: 'KUTILMOQDA');
+      case 'approved':
+        return (bg: const Color(0xFFE8F5E9), fg: const Color(0xFF2E7D32), label: 'TASDIQLANGAN');
+      case 'rejected':
+        return (bg: const Color(0xFFFFEBEE), fg: const Color(0xFFD32F2F), label: 'RAD ETILGAN');
+      default:
+        return (bg: const Color(0xFFECEFF1), fg: const Color(0xFF455A64), label: s.toUpperCase());
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final status = _currentStatus();
+    final sv = _statusVisual(status);
+
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(12.r),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12.r),
+        onTap: onTap,
+        child: Container(
+          padding: EdgeInsets.all(12.w),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(12.r),
+            border: Border.all(color: const Color(0x14000000)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Header row: avatar + name/specialty/phone + experience badge
+              Row(children: [
+                Container(
+                  width: 38.w,
+                  height: 38.w,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1976D2).withOpacity(0.12),
+                    shape: BoxShape.circle,
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    _initials(pv.name),
+                    style: TextStyle(
+                      color: const Color(0xFF1976D2),
+                      fontWeight: FontWeight.w800,
+                      fontSize: 13.sp,
+                    ),
+                  ),
+                ),
+                SizedBox(width: 10.w),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(pv.name,
+                          style: TextStyle(
+                            fontSize: 13.sp,
+                            fontWeight: FontWeight.w800,
+                            color: const Color(0xFF1F2937),
+                          )),
+                      SizedBox(height: 2.h),
+                      Text(pv.specialty,
+                          style: TextStyle(
+                            fontSize: 11.sp,
+                            color: Colors.grey.shade700,
+                          )),
+                      if (pv.phoneMasked != null) ...[
+                        SizedBox(height: 2.h),
+                        Row(children: [
+                          Icon(Icons.phone_outlined,
+                              size: 11.sp, color: Colors.grey.shade500),
+                          SizedBox(width: 4.w),
+                          Text(pv.phoneMasked!,
+                              style: TextStyle(
+                                fontSize: 10.5.sp,
+                                color: Colors.grey.shade600,
+                                fontWeight: FontWeight.w600,
+                                letterSpacing: 0.5,
+                              )),
+                        ]),
+                      ],
+                    ],
+                  ),
+                ),
+                Container(
+                  padding:
+                      EdgeInsets.symmetric(horizontal: 8.w, vertical: 3.h),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFF3E0),
+                    borderRadius: BorderRadius.circular(8.r),
+                  ),
+                  child: Text(
+                    '${pv.experienceYears} yil',
+                    style: TextStyle(
+                      fontSize: 10.5.sp,
+                      fontWeight: FontWeight.w800,
+                      color: const Color(0xFFE65100),
+                    ),
+                  ),
+                ),
+              ]),
+              SizedBox(height: 8.h),
+              // Status badge
+              Container(
+                padding:
+                    EdgeInsets.symmetric(horizontal: 8.w, vertical: 3.h),
+                decoration: BoxDecoration(
+                  color: sv.bg,
+                  borderRadius: BorderRadius.circular(6.r),
+                ),
+                child: Text(
+                  sv.label,
+                  style: TextStyle(
+                    fontSize: 9.5.sp,
+                    fontWeight: FontWeight.w800,
+                    color: sv.fg,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+              ),
+              SizedBox(height: 10.h),
+              // Action row — adapts to current status
+              _statusActions(status),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _statusActions(String status) {
+    switch (status) {
+      case 'pending':
+        return Row(children: [
+          Expanded(child: _btnOutlined('Rad etish', const Color(0xFFB45309),
+              Icons.close_rounded, onReject)),
+          SizedBox(width: 8.w),
+          Expanded(flex: 2, child: _btnFilled('Tasdiqlash',
+              const Color(0xFF198754), Icons.check_rounded, onApprove)),
+        ]);
+      case 'approved':
+        return Row(children: [
+          Expanded(child: _btnOutlined("To'xtatish", const Color(0xFFB45309),
+              Icons.block_rounded, onSuspend)),
+          SizedBox(width: 8.w),
+          Expanded(child: _btnOutlined("O'chirish", const Color(0xFFD32F2F),
+              Icons.delete_outline_rounded, onDelete)),
+        ]);
+      case 'rejected':
+        return Row(children: [
+          Expanded(child: _btnOutlined("O'chirish", const Color(0xFFD32F2F),
+              Icons.delete_outline_rounded, onDelete)),
+          SizedBox(width: 8.w),
+          Expanded(flex: 2, child: _btnFilled('Qayta tasdiqlash',
+              const Color(0xFF198754), Icons.check_rounded, onApprove)),
+        ]);
+      default:
+        return const SizedBox.shrink();
+    }
+  }
+
+  Widget _btnOutlined(String label, Color color, IconData icon, VoidCallback onTap) {
+    return OutlinedButton.icon(
+      onPressed: onTap,
+      icon: Icon(icon, size: 14),
+      label: Text(label, style: TextStyle(fontSize: 11.5.sp)),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: color,
+        side: BorderSide(color: color),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10.r)),
+        padding: EdgeInsets.symmetric(vertical: 8.h),
+      ),
+    );
+  }
+
+  Widget _btnFilled(String label, Color color, IconData icon, VoidCallback onTap) {
+    return ElevatedButton.icon(
+      onPressed: onTap,
+      icon: Icon(icon, size: 14),
+      label: Text(label, style: TextStyle(fontSize: 11.5.sp, fontWeight: FontWeight.w800)),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: color,
+        foregroundColor: Colors.white,
+        elevation: 0,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10.r)),
+        padding: EdgeInsets.symmetric(vertical: 8.h),
+      ),
+    );
+  }
+}
