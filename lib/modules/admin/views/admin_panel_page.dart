@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
@@ -5,6 +7,7 @@ import 'package:get/get.dart';
 
 import '../controllers/admin_session_controller.dart';
 import '../data/mock_admin_data.dart';
+import '../data/realtime_admin_service.dart';
 import 'admin_login_page.dart';
 import 'complaints_page.dart';
 import 'pending_verifications_page.dart';
@@ -48,25 +51,99 @@ class _AdminPanelPageState extends State<AdminPanelPage> {
   /// has focus.
   final FocusNode _shortcutFocus = FocusNode();
 
+  /// Subscription to RealtimeAdminService — lets the panel show toast
+  /// notifications and bump sidebar counters when a new application or
+  /// complaint arrives, even if the admin is on a different section.
+  StreamSubscription<RealtimeAdminEvent>? _realtimeSub;
+
+  /// Quick mute toggle bound to RealtimeAdminService.isSoundEnabled —
+  /// used by the sidebar's bell icon.
+  bool _soundOn = true;
+
   void _refresh() => setState(() {});
 
   @override
   void initState() {
     super.initState();
+    _soundOn = RealtimeAdminService.instance.isSoundEnabled;
+
     // Grab keyboard focus once first frame ships so Alt+N shortcuts work
     // without the user having to click into the panel first.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _shortcutFocus.requestFocus();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      _shortcutFocus.requestFocus();
+
+      // Start the Supabase Realtime channels (idempotent).
+      await RealtimeAdminService.instance.start();
+
+      // Ask for browser Notification permission once. Browsers will
+      // short-circuit if the user already chose. The prompt only fires
+      // on the first admin login per browser profile.
+      await RealtimeAdminService.instance.requestNotificationPermission();
     });
+
+    // Listen for realtime arrivals so we can refresh counters + show toasts.
+    _realtimeSub =
+        RealtimeAdminService.instance.events.listen(_onRealtimeEvent);
   }
 
   @override
   void dispose() {
     _shortcutFocus.dispose();
+    _realtimeSub?.cancel();
     super.dispose();
   }
 
+  /// Reacts to every realtime event so the panel feels live:
+  /// - Bumps the badge counts (via setState that re-reads providers).
+  /// - Shows a Get.snackbar toast for new registrations + complaints.
+  void _onRealtimeEvent(RealtimeAdminEvent ev) {
+    if (!mounted) return;
+    setState(() {/* badges read fresh in build */});
+    switch (ev.kind) {
+      case RealtimeAdminEventKind.registrationInserted:
+        if (ev.status == 'pending') {
+          Get.snackbar(
+            'Yangi ariza',
+            '${ev.name} — ${ev.category}',
+            snackPosition: SnackPosition.TOP,
+            backgroundColor: const Color(0xFF1976D2),
+            colorText: Colors.white,
+            margin: const EdgeInsets.all(12),
+            borderRadius: 10,
+            duration: const Duration(seconds: 4),
+            icon: const Icon(Icons.person_add_alt_1_rounded,
+                color: Colors.white),
+          );
+        }
+        break;
+      case RealtimeAdminEventKind.complaintInserted:
+        Get.snackbar(
+          'Yangi shikoyat',
+          ev.name.isNotEmpty ? '${ev.name} — ${ev.reason}' : ev.reason,
+          snackPosition: SnackPosition.TOP,
+          backgroundColor: const Color(0xFFD32F2F),
+          colorText: Colors.white,
+          margin: const EdgeInsets.all(12),
+          borderRadius: 10,
+          duration: const Duration(seconds: 4),
+          icon: const Icon(Icons.warning_amber_rounded, color: Colors.white),
+        );
+        break;
+      case RealtimeAdminEventKind.registrationUpdated:
+        // Quiet status flip from another admin tab — no toast needed.
+        break;
+    }
+  }
+
+  void _toggleSound() {
+    final next = !_soundOn;
+    RealtimeAdminService.instance.isSoundEnabled = next;
+    setState(() => _soundOn = next);
+  }
+
   Future<void> _signOut() async {
+    await RealtimeAdminService.instance.stop();
     await AdminSessionController.ensure().signOut();
     if (!mounted) return;
     if (Navigator.of(context).canPop()) {
@@ -145,6 +222,9 @@ class _AdminPanelPageState extends State<AdminPanelPage> {
           adminEmail: adminEmail,
           onSelect: _selectSection,
           onSignOut: _signOut,
+          soundOn: _soundOn,
+          onToggleSound: _toggleSound,
+          realtimeActive: RealtimeAdminService.instance.isStarted,
         ),
         Expanded(
           child: Column(
@@ -419,6 +499,9 @@ class _DesktopSidebar extends StatelessWidget {
   final String adminEmail;
   final ValueChanged<int> onSelect;
   final VoidCallback onSignOut;
+  final bool soundOn;
+  final VoidCallback onToggleSound;
+  final bool realtimeActive;
 
   const _DesktopSidebar({
     required this.selectedIndex,
@@ -427,6 +510,9 @@ class _DesktopSidebar extends StatelessWidget {
     required this.adminEmail,
     required this.onSelect,
     required this.onSignOut,
+    required this.soundOn,
+    required this.onToggleSound,
+    required this.realtimeActive,
   });
 
   @override
@@ -446,9 +532,9 @@ class _DesktopSidebar extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Brand row
+          // Brand row + sound toggle + realtime status pill
           Padding(
-            padding: const EdgeInsets.fromLTRB(20, 22, 20, 18),
+            padding: const EdgeInsets.fromLTRB(20, 22, 12, 14),
             child: Row(children: [
               Icon(Icons.admin_panel_settings_rounded,
                   size: 22, color: Colors.amber.shade300),
@@ -462,6 +548,45 @@ class _DesktopSidebar extends StatelessWidget {
                     fontWeight: FontWeight.w800,
                     letterSpacing: -0.2,
                   ),
+                ),
+              ),
+              // Live indicator: green dot pulses when realtime is up.
+              if (realtimeActive)
+                Tooltip(
+                  message: 'Realtime ulanish faol',
+                  child: Container(
+                    width: 8,
+                    height: 8,
+                    margin: const EdgeInsets.only(right: 8),
+                    decoration: const BoxDecoration(
+                      color: Color(0xFF22C55E),
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Color(0x9922C55E),
+                          blurRadius: 6,
+                          spreadRadius: 1,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              // Bell mute toggle.
+              IconButton(
+                tooltip:
+                    soundOn ? "Ovozni o'chirish" : "Ovozni yoqish",
+                padding: EdgeInsets.zero,
+                constraints:
+                    const BoxConstraints(minWidth: 32, minHeight: 32),
+                onPressed: onToggleSound,
+                icon: Icon(
+                  soundOn
+                      ? Icons.notifications_active_rounded
+                      : Icons.notifications_off_rounded,
+                  size: 18,
+                  color: soundOn
+                      ? Colors.amber.shade300
+                      : Colors.white54,
                 ),
               ),
             ]),

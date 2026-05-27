@@ -2,8 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:get/get.dart';
 
+import 'dart:async';
+
 import '../../usta/data/usta_registration_provider.dart';
 import '../data/mock_admin_data.dart';
+import '../data/realtime_admin_service.dart';
 import 'usta_detail_admin_view.dart';
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -38,10 +41,30 @@ class _PendingVerificationsPageState extends State<PendingVerificationsPage> {
   int _sortColumnIndex = 5; // Submitted (newest first by default)
   bool _sortAscending = false;
 
+  StreamSubscription<RealtimeAdminEvent>? _realtimeSub;
+
   @override
   void initState() {
     super.initState();
     _bootstrap();
+    // Re-render the table whenever a realtime registration event arrives
+    // so the new row shows up without the admin clicking Yangilash. The
+    // RealtimeAdminService has already merged the row into the provider
+    // by the time this fires — we just need to repaint.
+    _realtimeSub =
+        RealtimeAdminService.instance.events.listen((ev) {
+      if (!mounted) return;
+      if (ev.kind == RealtimeAdminEventKind.registrationInserted ||
+          ev.kind == RealtimeAdminEventKind.registrationUpdated) {
+        setState(() {});
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _realtimeSub?.cancel();
+    super.dispose();
   }
 
   /// First-open hook: pulls every `usta_registrations` row from Supabase
