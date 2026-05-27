@@ -33,6 +33,9 @@ class TelemetryPage extends StatefulWidget {
 class _TelemetryPageState extends State<TelemetryPage>
     with SingleTickerProviderStateMixin {
   late final TabController _tab;
+  /// 'today' | '7d' | '30d' | 'all' — applied to all three tables when
+  /// the desktop wide layout is active.
+  String _range = 'all';
 
   @override
   void initState() {
@@ -46,10 +49,31 @@ class _TelemetryPageState extends State<TelemetryPage>
     super.dispose();
   }
 
+  /// Returns rows whose `_at` timestamp is within the active time range.
+  List<Map<String, dynamic>> _filterByRange(List<Map<String, dynamic>> rows) {
+    if (_range == 'all') return rows;
+    final now = DateTime.now();
+    final cutoff = switch (_range) {
+      'today' => DateTime(now.year, now.month, now.day),
+      '7d' => now.subtract(const Duration(days: 7)),
+      '30d' => now.subtract(const Duration(days: 30)),
+      _ => DateTime.fromMillisecondsSinceEpoch(0),
+    };
+    return rows.where((r) {
+      final at = DateTime.tryParse((r['_at'] ?? '').toString());
+      if (at == null) return false;
+      return at.isAfter(cutoff);
+    }).toList();
+  }
+
   @override
   Widget build(BuildContext context) {
-    final body = _buildBody();
-    if (widget.embedded) return body;
+    if (widget.embedded) {
+      return LayoutBuilder(builder: (context, c) {
+        if (c.maxWidth >= 900) return _buildEmbeddedWide();
+        return _buildBody();
+      });
+    }
     return Scaffold(
       backgroundColor: const Color(0xFFF7F8FA),
       appBar: AppBar(
@@ -84,7 +108,7 @@ class _TelemetryPageState extends State<TelemetryPage>
           ],
         ),
       ),
-      body: body,
+      body: _buildBody(),
     );
   }
 
@@ -100,6 +124,92 @@ class _TelemetryPageState extends State<TelemetryPage>
               _FlowTab(),
               _FeedbackTab(),
             ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ─── Desktop wide layout (embedded ≥900px) ────────────────────────────
+
+  Widget _buildEmbeddedWide() {
+    final errors = _filterByRange(MockTelemetryStore.errors());
+    final flow = _filterByRange(MockTelemetryStore.flow());
+    final feedback = _filterByRange(MockTelemetryStore.feedback());
+    final funnel = MockTelemetryStore.buyurtmaFunnel();
+    final feedbackAvg = feedback.isEmpty
+        ? 0.0
+        : feedback
+                .map((r) => (r['ux_rating'] ?? 0) as int)
+                .fold<int>(0, (a, b) => a + b) /
+            feedback.length;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _TelemetryToolbar(
+          range: _range,
+          onRangeChange: (r) => setState(() => _range = r),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+          child: _KpiRow(
+            errors: errors.length,
+            flow: flow.length,
+            conversion: funnel.conversionPct,
+            feedbackCount: feedback.length,
+            feedbackAvg: feedbackAvg,
+          ),
+        ),
+        Container(
+          margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+            border: Border.all(color: const Color(0x14000000)),
+          ),
+          child: TabBar(
+            controller: _tab,
+            indicatorColor: const Color(0xFF6D28D9),
+            indicatorWeight: 3,
+            labelColor: const Color(0xFF1F2937),
+            unselectedLabelColor: Colors.grey.shade600,
+            labelStyle:
+                const TextStyle(fontSize: 13, fontWeight: FontWeight.w800),
+            tabs: const [
+              Tab(
+                  icon: Icon(Icons.bug_report_outlined, size: 16),
+                  text: 'Errors'),
+              Tab(
+                  icon: Icon(Icons.timeline_rounded, size: 16),
+                  text: 'Flow'),
+              Tab(
+                  icon: Icon(Icons.reviews_outlined, size: 16),
+                  text: 'Feedback'),
+            ],
+          ),
+        ),
+        Expanded(
+          child: Container(
+            margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius:
+                  const BorderRadius.vertical(bottom: Radius.circular(12)),
+              border: Border.all(color: const Color(0x14000000)),
+            ),
+            child: ClipRRect(
+              borderRadius:
+                  const BorderRadius.vertical(bottom: Radius.circular(12)),
+              child: TabBarView(
+                controller: _tab,
+                children: [
+                  _ErrorsTable(rows: errors),
+                  _FlowTable(rows: flow),
+                  _FeedbackTable(rows: feedback),
+                ],
+              ),
+            ),
           ),
         ),
       ],
@@ -480,5 +590,621 @@ String _fmtAt(dynamic raw) {
     return DateFormat('HH:mm:ss').format(dt.toLocal());
   } catch (_) {
     return raw.toString();
+  }
+}
+
+String _fmtFullAt(dynamic raw) {
+  if (raw == null) return '';
+  try {
+    final dt = DateTime.parse(raw.toString()).toLocal();
+    return DateFormat('MMM d, HH:mm:ss').format(dt);
+  } catch (_) {
+    return raw.toString();
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  DESKTOP WIDE — toolbar, KPI row, sortable tables for the embedded ≥900px
+//  layout. Mobile/standalone path still uses the original card list.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+class _TelemetryToolbar extends StatelessWidget {
+  final String range;
+  final ValueChanged<String> onRangeChange;
+
+  const _TelemetryToolbar({
+    required this.range,
+    required this.onRangeChange,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final ranges = const [
+      ('today', 'Today'),
+      ('7d', '7 days'),
+      ('30d', '30 days'),
+      ('all', 'All'),
+    ];
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(bottom: BorderSide(color: Color(0x14000000))),
+      ),
+      child: Row(children: [
+        Icon(Icons.filter_alt_outlined,
+            size: 16, color: Colors.grey.shade600),
+        const SizedBox(width: 6),
+        Text(
+          'Time range:',
+          style: TextStyle(
+            fontSize: 12,
+            color: Colors.grey.shade700,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(width: 10),
+        Wrap(
+          spacing: 6,
+          children: ranges.map((r) {
+            final active = range == r.$1;
+            return Material(
+              color: active ? const Color(0xFF6D28D9) : Colors.transparent,
+              borderRadius: BorderRadius.circular(20),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(20),
+                onTap: () => onRangeChange(r.$1),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 12, vertical: 7),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: active
+                          ? const Color(0xFF6D28D9)
+                          : Colors.grey.shade300,
+                    ),
+                  ),
+                  child: Text(
+                    r.$2,
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w800,
+                      color: active
+                          ? Colors.white
+                          : Colors.grey.shade700,
+                    ),
+                  ),
+                ),
+              ),
+            );
+          }).toList(),
+        ),
+      ]),
+    );
+  }
+}
+
+class _KpiRow extends StatelessWidget {
+  final int errors;
+  final int flow;
+  final double conversion;
+  final int feedbackCount;
+  final double feedbackAvg;
+
+  const _KpiRow({
+    required this.errors,
+    required this.flow,
+    required this.conversion,
+    required this.feedbackCount,
+    required this.feedbackAvg,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(children: [
+      Expanded(
+        child: _KpiCard(
+          label: 'Errors',
+          value: '$errors',
+          icon: Icons.bug_report_outlined,
+          color: const Color(0xFFD32F2F),
+        ),
+      ),
+      const SizedBox(width: 10),
+      Expanded(
+        child: _KpiCard(
+          label: 'Flow events',
+          value: '$flow',
+          icon: Icons.timeline_rounded,
+          color: const Color(0xFF1976D2),
+        ),
+      ),
+      const SizedBox(width: 10),
+      Expanded(
+        child: _KpiCard(
+          label: 'Funnel conversion',
+          value: '${conversion.toStringAsFixed(1)}%',
+          icon: Icons.trending_up_rounded,
+          color: conversion >= 50
+              ? const Color(0xFF2E7D32)
+              : const Color(0xFFE65100),
+        ),
+      ),
+      const SizedBox(width: 10),
+      Expanded(
+        child: _KpiCard(
+          label: 'Feedback ($feedbackCount)',
+          value: feedbackCount == 0
+              ? '—'
+              : '${feedbackAvg.toStringAsFixed(1)} ★',
+          icon: Icons.reviews_outlined,
+          color: const Color(0xFF6D28D9),
+        ),
+      ),
+    ]);
+  }
+}
+
+class _KpiCard extends StatelessWidget {
+  final String label;
+  final String value;
+  final IconData icon;
+  final Color color;
+  const _KpiCard({
+    required this.label,
+    required this.value,
+    required this.icon,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0x14000000)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Container(
+              width: 32,
+              height: 32,
+              decoration: BoxDecoration(
+                color: color.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(icon, size: 18, color: color),
+            ),
+          ]),
+          const SizedBox(height: 10),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 22,
+              fontWeight: FontWeight.w800,
+              color: color,
+              letterSpacing: -0.4,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 11.5,
+              color: Colors.grey.shade600,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── Errors table ────────────────────────────────────────────────────────
+
+class _ErrorsTable extends StatefulWidget {
+  final List<Map<String, dynamic>> rows;
+  const _ErrorsTable({required this.rows});
+  @override
+  State<_ErrorsTable> createState() => _ErrorsTableState();
+}
+
+class _ErrorsTableState extends State<_ErrorsTable> {
+  int _sortIdx = 0;
+  bool _asc = false;
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.rows.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(28),
+          child: Text('tele_empty_errors'.tr,
+              style: TextStyle(fontSize: 13, color: Colors.grey.shade600)),
+        ),
+      );
+    }
+    final rows = List<Map<String, dynamic>>.from(widget.rows);
+    rows.sort((a, b) {
+      int cmp;
+      switch (_sortIdx) {
+        case 1:
+          cmp = (a['event_type'] ?? '')
+              .toString()
+              .compareTo((b['event_type'] ?? '').toString());
+          break;
+        case 2:
+          cmp = (a['exception_class'] ?? '')
+              .toString()
+              .compareTo((b['exception_class'] ?? '').toString());
+          break;
+        case 3:
+          cmp = (a['ui_route'] ?? '')
+              .toString()
+              .compareTo((b['ui_route'] ?? '').toString());
+          break;
+        case 0:
+        default:
+          cmp = (a['_at'] ?? '')
+              .toString()
+              .compareTo((b['_at'] ?? '').toString());
+      }
+      return _asc ? cmp : -cmp;
+    });
+    return SingleChildScrollView(
+      child: DataTable(
+        sortColumnIndex: _sortIdx,
+        sortAscending: _asc,
+        headingRowColor:
+            WidgetStateProperty.all(const Color(0xFFF1F5F9)),
+        headingTextStyle: const TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w800,
+          color: Color(0xFF334155),
+          letterSpacing: 0.4,
+        ),
+        dataRowMinHeight: 48,
+        dataRowMaxHeight: 64,
+        columnSpacing: 18,
+        horizontalMargin: 16,
+        columns: [
+          DataColumn(
+              label: const Text('TIME'),
+              onSort: (i, a) => setState(() {
+                    _sortIdx = i;
+                    _asc = a;
+                  })),
+          DataColumn(
+              label: const Text('TYPE'),
+              onSort: (i, a) => setState(() {
+                    _sortIdx = i;
+                    _asc = a;
+                  })),
+          DataColumn(
+              label: const Text('EXCEPTION'),
+              onSort: (i, a) => setState(() {
+                    _sortIdx = i;
+                    _asc = a;
+                  })),
+          DataColumn(
+              label: const Text('ROUTE'),
+              onSort: (i, a) => setState(() {
+                    _sortIdx = i;
+                    _asc = a;
+                  })),
+          const DataColumn(label: Text('MESSAGE')),
+        ],
+        rows: rows.map((r) {
+          return DataRow(cells: [
+            DataCell(Text(_fmtFullAt(r['_at']),
+                style: TextStyle(
+                    fontSize: 11.5, color: Colors.grey.shade600))),
+            DataCell(Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFEBEE),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                (r['event_type'] ?? '').toString(),
+                style: const TextStyle(
+                  fontSize: 10,
+                  color: Color(0xFFD32F2F),
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            )),
+            DataCell(Text(
+              (r['exception_class'] ?? '—').toString(),
+              style: const TextStyle(
+                  fontSize: 12, fontWeight: FontWeight.w700),
+            )),
+            DataCell(Text(
+              (r['ui_route'] ?? '').toString(),
+              style: TextStyle(
+                fontSize: 11.5,
+                color: const Color(0xFF1976D2),
+                fontWeight: FontWeight.w600,
+              ),
+            )),
+            DataCell(SizedBox(
+              width: 320,
+              child: Text(
+                (r['message'] ?? '').toString(),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 12),
+              ),
+            )),
+          ]);
+        }).toList(),
+      ),
+    );
+  }
+}
+
+// ─── Flow table ──────────────────────────────────────────────────────────
+
+class _FlowTable extends StatefulWidget {
+  final List<Map<String, dynamic>> rows;
+  const _FlowTable({required this.rows});
+  @override
+  State<_FlowTable> createState() => _FlowTableState();
+}
+
+class _FlowTableState extends State<_FlowTable> {
+  int _sortIdx = 0;
+  bool _asc = false;
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.rows.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(28),
+          child: Text('tele_empty_flow'.tr,
+              style: TextStyle(fontSize: 13, color: Colors.grey.shade600)),
+        ),
+      );
+    }
+    final rows = List<Map<String, dynamic>>.from(widget.rows);
+    rows.sort((a, b) {
+      int cmp;
+      switch (_sortIdx) {
+        case 1:
+          cmp = (a['event_id'] ?? '')
+              .toString()
+              .compareTo((b['event_id'] ?? '').toString());
+          break;
+        case 0:
+        default:
+          cmp = (a['_at'] ?? '')
+              .toString()
+              .compareTo((b['_at'] ?? '').toString());
+      }
+      return _asc ? cmp : -cmp;
+    });
+    return SingleChildScrollView(
+      child: DataTable(
+        sortColumnIndex: _sortIdx,
+        sortAscending: _asc,
+        headingRowColor:
+            WidgetStateProperty.all(const Color(0xFFF1F5F9)),
+        headingTextStyle: const TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w800,
+          color: Color(0xFF334155),
+          letterSpacing: 0.4,
+        ),
+        dataRowMinHeight: 48,
+        dataRowMaxHeight: 72,
+        columnSpacing: 18,
+        horizontalMargin: 16,
+        columns: [
+          DataColumn(
+              label: const Text('TIME'),
+              onSort: (i, a) => setState(() {
+                    _sortIdx = i;
+                    _asc = a;
+                  })),
+          DataColumn(
+              label: const Text('EVENT'),
+              onSort: (i, a) => setState(() {
+                    _sortIdx = i;
+                    _asc = a;
+                  })),
+          const DataColumn(label: Text('PAYLOAD')),
+        ],
+        rows: rows.map((r) {
+          final ev = (r['event_id'] ?? '').toString();
+          final color = ev.contains('success')
+              ? const Color(0xFF2E7D32)
+              : ev.contains('invalid')
+                  ? const Color(0xFFE65100)
+                  : const Color(0xFF1976D2);
+          final payload = (r['payload'] as Map?) ?? const {};
+          return DataRow(cells: [
+            DataCell(Text(_fmtFullAt(r['_at']),
+                style: TextStyle(
+                    fontSize: 11.5, color: Colors.grey.shade600))),
+            DataCell(Row(children: [
+              Container(
+                width: 8,
+                height: 8,
+                decoration:
+                    BoxDecoration(color: color, shape: BoxShape.circle),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                ev,
+                style: TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w800,
+                  color: color,
+                ),
+              ),
+            ])),
+            DataCell(SizedBox(
+              width: 360,
+              child: Text(
+                payload.isEmpty
+                    ? '—'
+                    : payload.entries
+                        .map((e) => '${e.key}=${e.value}')
+                        .join('  ·  '),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 11.5,
+                  fontFamily: 'monospace',
+                ),
+              ),
+            )),
+          ]);
+        }).toList(),
+      ),
+    );
+  }
+}
+
+// ─── Feedback table ──────────────────────────────────────────────────────
+
+class _FeedbackTable extends StatefulWidget {
+  final List<Map<String, dynamic>> rows;
+  const _FeedbackTable({required this.rows});
+  @override
+  State<_FeedbackTable> createState() => _FeedbackTableState();
+}
+
+class _FeedbackTableState extends State<_FeedbackTable> {
+  int _sortIdx = 0;
+  bool _asc = false;
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.rows.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(28),
+          child: Text('tele_empty_feedback'.tr,
+              style: TextStyle(fontSize: 13, color: Colors.grey.shade600)),
+        ),
+      );
+    }
+    final rows = List<Map<String, dynamic>>.from(widget.rows);
+    rows.sort((a, b) {
+      int cmp;
+      switch (_sortIdx) {
+        case 1:
+          cmp = ((a['ux_rating'] ?? 0) as int)
+              .compareTo((b['ux_rating'] ?? 0) as int);
+          break;
+        case 0:
+        default:
+          cmp = (a['_at'] ?? '')
+              .toString()
+              .compareTo((b['_at'] ?? '').toString());
+      }
+      return _asc ? cmp : -cmp;
+    });
+    return SingleChildScrollView(
+      child: DataTable(
+        sortColumnIndex: _sortIdx,
+        sortAscending: _asc,
+        headingRowColor:
+            WidgetStateProperty.all(const Color(0xFFF1F5F9)),
+        headingTextStyle: const TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w800,
+          color: Color(0xFF334155),
+          letterSpacing: 0.4,
+        ),
+        dataRowMinHeight: 48,
+        dataRowMaxHeight: 72,
+        columnSpacing: 18,
+        horizontalMargin: 16,
+        columns: [
+          DataColumn(
+              label: const Text('TIME'),
+              onSort: (i, a) => setState(() {
+                    _sortIdx = i;
+                    _asc = a;
+                  })),
+          DataColumn(
+              label: const Text('RATING'),
+              numeric: true,
+              onSort: (i, a) => setState(() {
+                    _sortIdx = i;
+                    _asc = a;
+                  })),
+          const DataColumn(label: Text('TAGS')),
+          const DataColumn(label: Text('COMMENT')),
+        ],
+        rows: rows.map((r) {
+          final rating = (r['ux_rating'] ?? 0) as int;
+          final tags = (r['tags'] as List?) ?? const [];
+          return DataRow(cells: [
+            DataCell(Text(_fmtFullAt(r['_at']),
+                style: TextStyle(
+                    fontSize: 11.5, color: Colors.grey.shade600))),
+            DataCell(Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: List.generate(
+                5,
+                (i) => Icon(
+                  i < rating
+                      ? Icons.star_rounded
+                      : Icons.star_border_rounded,
+                  size: 14,
+                  color: Colors.amber.shade600,
+                ),
+              ),
+            )),
+            DataCell(SizedBox(
+              width: 220,
+              child: Wrap(
+                spacing: 4,
+                runSpacing: 4,
+                children: tags
+                    .take(4)
+                    .map((t) => Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: const Color(0x196D28D9),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text(
+                            t.toString(),
+                            style: const TextStyle(
+                              fontSize: 10,
+                              color: Color(0xFF6D28D9),
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ))
+                    .toList(),
+              ),
+            )),
+            DataCell(SizedBox(
+              width: 280,
+              child: Text(
+                (r['comment'] ?? '').toString(),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 12),
+              ),
+            )),
+          ]);
+        }).toList(),
+      ),
+    );
   }
 }
