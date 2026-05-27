@@ -9,6 +9,8 @@ import '../controllers/admin_session_controller.dart';
 import '../data/mock_admin_data.dart';
 import '../data/realtime_admin_service.dart';
 import 'admin_login_page.dart';
+import 'analytics_page.dart';
+import 'chats_moderation_page.dart';
 import 'complaints_page.dart';
 import 'pending_verifications_page.dart';
 import 'telemetry_page.dart';
@@ -203,6 +205,14 @@ class _AdminPanelPageState extends State<AdminPanelPage> {
       _selectSection(2);
       return KeyEventResult.handled;
     }
+    if (event.logicalKey == LogicalKeyboardKey.digit4) {
+      _selectSection(3);
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.digit5) {
+      _selectSection(4);
+      return KeyEventResult.handled;
+    }
     return KeyEventResult.ignored;
   }
 
@@ -266,6 +276,8 @@ class _AdminPanelPageState extends State<AdminPanelPage> {
         PendingVerificationsPage(embedded: true),
         ComplaintsPage(embedded: true),
         TelemetryPage(embedded: true),
+        ChatsModerationPage(embedded: true),
+        AnalyticsPage(embedded: true),
       ],
     );
   }
@@ -619,6 +631,24 @@ class _DesktopSidebar extends StatelessWidget {
             badgeColor: const Color(0xFF6D28D9),
             selected: selectedIndex == 2,
             onTap: () => onSelect(2),
+          ),
+          _SidebarItem(
+            icon: Icons.forum_rounded,
+            label: 'Suhbatlar',
+            shortcut: 'Alt+4',
+            badge: null,
+            badgeColor: const Color(0xFF0891B2),
+            selected: selectedIndex == 3,
+            onTap: () => onSelect(3),
+          ),
+          _SidebarItem(
+            icon: Icons.analytics_rounded,
+            label: 'Analytics',
+            shortcut: 'Alt+5',
+            badge: 'NEW',
+            badgeColor: const Color(0xFF0F766E),
+            selected: selectedIndex == 4,
+            onTap: () => onSelect(4),
           ),
           const Spacer(),
           if (adminEmail.isNotEmpty)
