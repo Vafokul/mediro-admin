@@ -17,6 +17,7 @@ import 'complaints_page.dart';
 import 'pending_verifications_page.dart';
 import 'provider_offerings_page.dart';
 import 'telemetry_page.dart';
+import 'usta_reviews_page.dart';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  ADMIN PANEL — owner-only dashboard.
@@ -252,6 +253,16 @@ class _AdminPanelPageState extends State<AdminPanelPage> {
       _selectSection(6);
       return KeyEventResult.handled;
     }
+    // 8 and 9 were labelled in the sidebar but never bound, so the shortcut
+    // printed on those two rows did nothing.
+    if (event.logicalKey == LogicalKeyboardKey.digit8) {
+      _selectSection(7);
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.digit9) {
+      _selectSection(8);
+      return KeyEventResult.handled;
+    }
     return KeyEventResult.ignored;
   }
 
@@ -320,6 +331,7 @@ class _AdminPanelPageState extends State<AdminPanelPage> {
         CategoryManagementPage(embedded: true),
         ProviderOfferingsPage(embedded: true),
         ChatReportsPage(embedded: true),
+        UstaReviewsPage(embedded: true),
       ],
     );
   }
@@ -718,6 +730,15 @@ class _DesktopSidebar extends StatelessWidget {
             badgeColor: const Color(0xFFD32F2F),
             selected: selectedIndex == 7,
             onTap: () => onSelect(7),
+          ),
+          _SidebarItem(
+            icon: Icons.reviews_rounded,
+            label: 'Usta sharhlari',
+            shortcut: 'Alt+9',
+            badge: null,
+            badgeColor: const Color(0xFFE65100),
+            selected: selectedIndex == 8,
+            onTap: () => onSelect(8),
           ),
           const Spacer(),
           if (adminEmail.isNotEmpty)
