@@ -910,12 +910,27 @@ class _DesktopTopBar extends StatelessWidget {
     required this.adminEmail,
   });
 
+  // Every section, not the first three: until now 4 through 9 all fell through
+  // to «Ustalar / All providers», so the page said one thing and the header
+  // said another — visible the moment a ninth section arrived.
   String get _title {
     switch (section) {
       case 1:
         return 'admin_tile_complaints_title'.tr;
       case 2:
         return 'admin_tile_telemetry_title'.tr;
+      case 3:
+        return 'Suhbatlar';
+      case 4:
+        return 'Analytics';
+      case 5:
+        return 'cat_title'.tr;
+      case 6:
+        return 'prov_title'.tr;
+      case 7:
+        return 'Chat shikoyatlari';
+      case 8:
+        return 'Usta sharhlari';
       case 0:
       default:
         return 'admin_tile_verif_title'.tr;
@@ -928,6 +943,18 @@ class _DesktopTopBar extends StatelessWidget {
         return 'admin_tile_complaints_sub'.tr;
       case 2:
         return 'admin_tile_telemetry_sub'.tr;
+      case 3:
+        return 'Mijoz va usta yozishmalari';
+      case 4:
+        return "Ko'rsatkichlar";
+      case 5:
+        return "Kategoriyalar va yo'nalishlar";
+      case 6:
+        return "Ustalar va ularning e'lonlari";
+      case 7:
+        return 'Chatdan kelgan shikoyatlar';
+      case 8:
+        return 'Mijozlar yozgan sharhlar';
       case 0:
       default:
         return 'admin_tile_verif_sub'.tr;
