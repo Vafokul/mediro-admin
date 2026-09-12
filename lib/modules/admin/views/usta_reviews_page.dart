@@ -161,7 +161,8 @@ class _UstaReviewsPageState extends State<UstaReviewsPage> {
     final filters = [
       ('all', 'Barchasi (${UstaReviewProvider.all().length})'),
       ('flagged', 'Belgilangan (${UstaReviewProvider.flaggedCount()})'),
-      ('removed', "O'chirilgan (${UstaReviewProvider.removed().length})"),
+      ('removed',
+          "O'chirilgan (${UstaReviewProvider.removed().where((r) => !r.restored).length})"),
     ];
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Container(
@@ -294,19 +295,29 @@ class _UstaReviewsPageState extends State<UstaReviewsPage> {
                     fontSize: 11.5.sp, color: const Color(0xFF6B7280))),
           ),
           const SizedBox(height: 10),
-          SizedBox(
-            height: 32,
-            child: OutlinedButton(
-              onPressed: () => _restore(r),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: const Color(0xFF455A64),
-                side: const BorderSide(color: Color(0xFF455A64)),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8)),
+          // A restored row stays on the list, marked: the review did not come
+          // back, so the record of the takedown is all there is.
+          if (r.restored)
+            Text('Qayta ruxsat berilgan — mijoz yana yoza oladi',
+                style: TextStyle(
+                    fontSize: 11.5.sp,
+                    fontWeight: FontWeight.w700,
+                    color: const Color(0xFF198754)))
+          else
+            SizedBox(
+              height: 32,
+              child: OutlinedButton(
+                onPressed: () => _restore(r),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFF455A64),
+                  side: const BorderSide(color: Color(0xFF455A64)),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8)),
+                ),
+                child:
+                    const Text('Qayta ruxsat', style: TextStyle(fontSize: 12)),
               ),
-              child: const Text('Qayta ruxsat', style: TextStyle(fontSize: 12)),
             ),
-          ),
         ] else ...[
           const SizedBox(height: 12),
           SizedBox(

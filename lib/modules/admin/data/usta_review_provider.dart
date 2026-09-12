@@ -36,6 +36,11 @@ class UstaReview {
   final String reason;
   final String removedByEmail;
 
+  /// A takedown that was undone. The row STAYS on the record — the review
+  /// itself never comes back, so erasing the row would mean an admin could
+  /// remove anything and leave no trace.
+  final bool restored;
+
   UstaReview({
     required this.id,
     required this.ustaId,
@@ -49,6 +54,7 @@ class UstaReview {
     this.removedAt,
     this.reason = '',
     this.removedByEmail = '',
+    this.restored = false,
   });
 
   static UstaReview _fromMap(Map<String, dynamic> m) => UstaReview(
@@ -64,6 +70,7 @@ class UstaReview {
         removedAt: DateTime.tryParse((m['removed_at'] ?? '').toString()),
         reason: (m['reason'] ?? '').toString(),
         removedByEmail: (m['removed_by_email'] ?? '').toString(),
+        restored: m['restored'] == true,
       );
 }
 
@@ -119,7 +126,7 @@ class UstaReviewProvider {
   }
 
   /// Undoes a takedown: the review itself does not come back, but its author
-  /// may write about that usta again.
+  /// may write about that usta again. The archive row stays, marked.
   static Future<bool> restore(String id) async {
     try {
       await Supabase.instance.client
