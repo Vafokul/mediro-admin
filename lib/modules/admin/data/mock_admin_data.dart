@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../usta/data/usta_registration_provider.dart';
+import 'provider_specialties.dart';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  MOCK ADMIN DATA — Phase 1
@@ -29,6 +30,12 @@ class PendingVerification {
   final String ustaId;
   final String name;
   final String specialty;
+
+  /// EVERY trade this provider offers, from service_offerings — «Elektrik» and
+  /// «Santexnik» are one person here. [specialty] is the single old column
+  /// from the first sign-up form; it stays for the providers who have no
+  /// offerings yet, and is the fallback below.
+  final List<String> specialties;
   final int experienceYears;
   final DateTime submittedAt;
 
@@ -73,6 +80,7 @@ class PendingVerification {
     required this.ustaId,
     required this.name,
     required this.specialty,
+    this.specialties = const [],
     required this.experienceYears,
     required this.submittedAt,
     this.phoneMasked,
@@ -84,6 +92,15 @@ class PendingVerification {
     this.isBusiness = false,
     this.reviewedAt,
   });
+}
+
+/// The trades a provider offers, or the old single column when they have
+/// none yet. Never empty for a provider who filled either in.
+List<String> _tradesOf(String id, String legacy) {
+  final live = ProviderSpecialties.of(id);
+  if (live.isNotEmpty) return live;
+  final one = legacy.trim();
+  return one.isEmpty ? const [] : [one];
 }
 
 class PendingVerificationProvider {
@@ -103,6 +120,7 @@ class PendingVerificationProvider {
         ustaId: r.id,
         name: r.name,
         specialty: r.category,
+        specialties: _tradesOf(r.id, r.category),
         experienceYears: r.experienceYears,
         submittedAt: r.submittedAt,
         phoneMasked: r.phoneMasked,
@@ -144,6 +162,7 @@ class PendingVerificationProvider {
         ustaId: r.id,
         name: r.name,
         specialty: r.category,
+        specialties: _tradesOf(r.id, r.category),
         experienceYears: r.experienceYears,
         submittedAt: r.submittedAt,
         phoneMasked: r.phoneMasked,

@@ -5,6 +5,7 @@ import 'package:get/get.dart';
 import 'dart:async';
 
 import '../../usta/data/usta_registration_provider.dart';
+import '../data/provider_specialties.dart';
 import '../data/mock_admin_data.dart';
 import '../data/realtime_admin_service.dart';
 import 'usta_detail_admin_view.dart';
@@ -40,6 +41,11 @@ class PendingVerificationsPage extends StatefulWidget {
   State<PendingVerificationsPage> createState() =>
       _PendingVerificationsPageState();
 }
+
+/// What the SPECIALTY column says: every trade, or «—» for a provider who has
+/// filled in none.
+String _tradesLabel(PendingVerification pv) =>
+    pv.specialties.isEmpty ? '—' : pv.specialties.join(', ');
 
 class _PendingVerificationsPageState extends State<PendingVerificationsPage> {
   bool _loading = false;
@@ -88,6 +94,7 @@ class _PendingVerificationsPageState extends State<PendingVerificationsPage> {
   Future<void> _bootstrap() async {
     setState(() => _loading = true);
     await UstaRegistrationProvider.fetchAllFromCloud(force: true);
+    await ProviderSpecialties.fetchAllFromCloud(force: true);
     if (!mounted) return;
     setState(() => _loading = false);
   }
@@ -99,6 +106,7 @@ class _PendingVerificationsPageState extends State<PendingVerificationsPage> {
     setState(() => _loading = true);
     final before = UstaRegistrationProvider.allRegistrations().length;
     await UstaRegistrationProvider.fetchAllFromCloud(force: true);
+    await ProviderSpecialties.fetchAllFromCloud(force: true);
     if (!mounted) return;
     final after = UstaRegistrationProvider.allRegistrations().length;
     setState(() => _loading = false);
@@ -125,6 +133,7 @@ class _PendingVerificationsPageState extends State<PendingVerificationsPage> {
 
   Future<void> _refreshFromCloud() async {
     await UstaRegistrationProvider.fetchAllFromCloud(force: true);
+    await ProviderSpecialties.fetchAllFromCloud(force: true);
     if (mounted) setState(() {});
   }
 
@@ -305,8 +314,13 @@ class _PendingVerificationsPageState extends State<PendingVerificationsPage> {
     var list = PendingVerificationProvider.byStatus(_statusFilter);
     // Options come from the status-filtered set BEFORE narrowing by specialty,
     // otherwise picking one would leave the dropdown holding only itself.
+    // ⛔ EVERY trade, not the single old column. An usta who offers
+    // «Elektrik» and «Santexnik» belongs under both; reading pv.specialty
+    // alone hid five of the fourteen approved providers from one of their
+    // own trades, and one with an empty old column from all of them.
     final specialties = list
-        .map((pv) => pv.specialty.trim())
+        .expand((pv) => pv.specialties)
+        .map((s) => s.trim())
         .where((s) => s.isNotEmpty)
         .toSet()
         .toList()
@@ -316,13 +330,15 @@ class _PendingVerificationsPageState extends State<PendingVerificationsPage> {
     final activeSpecialty =
         specialties.contains(_specialty) ? _specialty : 'all';
     if (activeSpecialty != 'all') {
-      list = list.where((pv) => pv.specialty.trim() == activeSpecialty).toList();
+      list = list
+          .where((pv) => pv.specialties.any((s) => s.trim() == activeSpecialty))
+          .toList();
     }
     if (_search.trim().isNotEmpty) {
       final q = _search.trim().toLowerCase();
       list = list.where((pv) =>
           pv.name.toLowerCase().contains(q) ||
-          pv.specialty.toLowerCase().contains(q) ||
+          pv.specialties.any((s) => s.toLowerCase().contains(q)) ||
           (pv.phoneMasked ?? '').toLowerCase().contains(q)).toList();
     }
     if (widget.embedded) {
@@ -528,9 +544,9 @@ class _PendingVerificationsPageState extends State<PendingVerificationsPage> {
           cmp = a.pv.name.toLowerCase().compareTo(b.pv.name.toLowerCase());
           break;
         case 1:
-          cmp = a.pv.specialty
+          cmp = _tradesLabel(a.pv)
               .toLowerCase()
-              .compareTo(b.pv.specialty.toLowerCase());
+              .compareTo(_tradesLabel(b.pv).toLowerCase());
           break;
         case 2:
           cmp = (a.pv.phoneMasked ?? '')
@@ -597,7 +613,7 @@ class _PendingVerificationsPageState extends State<PendingVerificationsPage> {
                             mainAxisAlignment: MainAxisAlignment.center,
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(pv.specialty,
+                              Text(_tradesLabel(pv),
                                   style: const TextStyle(fontSize: 12.5)),
                               const SizedBox(height: 2),
                               Container(
@@ -616,7 +632,7 @@ class _PendingVerificationsPageState extends State<PendingVerificationsPage> {
                               ),
                             ],
                           )
-                        : Text(pv.specialty,
+                        : Text(_tradesLabel(pv),
                             style: const TextStyle(fontSize: 12.5)),
                   ),
                   DataCell(Text(pv.phoneMasked ?? '—',
@@ -1269,7 +1285,7 @@ class _UstaCard extends StatelessWidget {
                             color: const Color(0xFF1F2937),
                           )),
                       SizedBox(height: 2.h),
-                      Text(pv.specialty,
+                      Text(_tradesLabel(pv),
                           style: TextStyle(
                             fontSize: 11.sp,
                             color: Colors.grey.shade700,

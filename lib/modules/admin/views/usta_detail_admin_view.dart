@@ -285,7 +285,11 @@ class _UstaDetailAdminViewState extends State<UstaDetailAdminView> {
         _detailRow(
           icon: Icons.work_outline_rounded,
           label: 'apt_row_category'.tr,
-          value: pv.specialty,
+          // Every trade they offer, not the single box from the old sign-up
+          // form — an usta who does «Elektrik» and «Santexnik» is one person.
+          value: pv.specialties.isEmpty
+              ? pv.specialty
+              : pv.specialties.join(', '),
         ),
         _divider(),
         _detailRow(
